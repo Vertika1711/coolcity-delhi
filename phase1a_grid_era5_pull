@@ -1,0 +1,79 @@
+// Load administrative boundaries dataset
+var admin2 = ee.FeatureCollection("FAO/GAUL/2015/level2");
+
+// Filter to Delhi
+var delhi = admin2.filter(ee.Filter.eq('ADM1_NAME', 'Delhi'));
+
+// Print info to console (to check it worked)
+print('Delhi boundary:', delhi);
+
+// Add to map to visualize
+Map.centerObject(delhi, 9);
+Map.addLayer(delhi, {color: 'red'}, 'Delhi Boundary');
+
+// Get the bounding box of Delhi
+var delhiBounds = delhi.geometry().bounds();
+
+// Create a 2km grid using ee.Image.pixelLonLat and reproject trick
+// Step A: create a coordinate image, reproject to a 2km grid
+var proj = ee.Projection('EPSG:32643').atScale(2000); // UTM Zone 43N, meters, 2km cells
+
+// Step B: generate grid cells covering Delhi's bounding box
+var grid = delhiBounds.coveringGrid(proj);
+
+// Step C: clip grid to actual Delhi boundary (not just bounding box)
+var delhiGrid = grid.filterBounds(delhi);
+
+// Assign a unique ID to each grid cell
+var delhiGridWithID = delhiGrid.map(function(feature) {
+  return feature.set('cell_id', feature.get('system:index'));
+});
+
+// Print how many grid cells we got
+print('Number of grid cells:', delhiGridWithID.size());
+
+// Visualize the grid
+Map.addLayer(delhiGridWithID, {color: 'blue'}, 'Delhi 2km Grid');
+
+// Pick one test date
+var testDate = ee.Date('2025-05-15'); // a hot day in May, good test case
+
+// Load ERA5-Land dataset (daily aggregates)
+var era5 = ee.ImageCollection('ECMWF/ERA5_LAND/DAILY_AGGR')
+  .filterDate(testDate, testDate.advance(1, 'day'))
+  .first();
+
+// Select the variables we need:
+// - temperature_2m (Kelvin)
+// - dewpoint_temperature_2m (Kelvin) -> used to derive humidity
+// - u_component_of_wind_10m, v_component_of_wind_10m -> combine for wind speed
+// - surface_solar_radiation_downwards_sum (solar radiation)
+var era5Vars = era5.select([
+  'temperature_2m',
+  'dewpoint_temperature_2m',
+  'u_component_of_wind_10m',
+  'v_component_of_wind_10m',
+  'surface_solar_radiation_downwards_sum'
+]);
+
+// Compute wind speed from u and v components
+var windSpeed = era5Vars.expression(
+  'sqrt(u*u + v*v)', {
+    'u': era5Vars.select('u_component_of_wind_10m'),
+    'v': era5Vars.select('v_component_of_wind_10m')
+  }).rename('wind_speed');
+
+var era5Final = era5Vars.addBands(windSpeed);
+
+// Extract average values for each grid cell using reduceRegions
+var gridWithERA5 = era5Final.reduceRegions({
+  collection: delhiGridWithID,
+  reducer: ee.Reducer.mean(),
+  scale: 9000  // ERA5-Land native resolution ~9km
+});
+
+// Print first few results to check
+print('Grid with ERA5 values (first 5):', gridWithERA5.limit(5));
+
+// Visualize temperature across the grid
+Map.addLayer(gridWithERA5, {}, 'Grid with ERA5 data');
