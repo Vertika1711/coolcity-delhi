@@ -137,3 +137,19 @@ var allDates = years.map(function(year) {
 print('Total number of dates:', allDates.size());
 print('First 5 dates:', allDates.slice(0, 5));
 print('Last 5 dates:', allDates.slice(-5));
+
+// Map the ERA5 extraction function across all 728 dates
+var allResults = ee.FeatureCollection(allDates.map(function(dateStr) {
+  return getERA5ForDate(dateStr);
+})).flatten();
+
+// Export as CSV to Google Drive
+Export.table.toDrive({
+  collection: allResults,
+  description: 'CoolCity_ERA5_2019_2026',
+  folder: 'CoolCity_Exports',
+  fileNamePrefix: 'coolcity_era5_full',
+  fileFormat: 'CSV'
+});
+
+print('Export task created — check the Tasks tab to run it.');
