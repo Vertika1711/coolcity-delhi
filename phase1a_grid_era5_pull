@@ -77,3 +77,45 @@ print('Grid with ERA5 values (first 5):', gridWithERA5.limit(5));
 
 // Visualize temperature across the grid
 Map.addLayer(gridWithERA5, {}, 'Grid with ERA5 data');
+
+// Function: given a date, return the grid with ERA5 values attached
+function getERA5ForDate(dateStr) {
+  var date = ee.Date(dateStr);
+
+  var era5 = ee.ImageCollection('ECMWF/ERA5_LAND/DAILY_AGGR')
+    .filterDate(date, date.advance(1, 'day'))
+    .first();
+
+  var vars = era5.select([
+    'temperature_2m',
+    'dewpoint_temperature_2m',
+    'u_component_of_wind_10m',
+    'v_component_of_wind_10m',
+    'surface_solar_radiation_downwards_sum'
+  ]);
+
+  var wind = vars.expression(
+    'sqrt(u*u + v*v)', {
+      'u': vars.select('u_component_of_wind_10m'),
+      'v': vars.select('v_component_of_wind_10m')
+    }).rename('wind_speed');
+
+  var finalImg = vars.addBands(wind);
+
+  var result = finalImg.reduceRegions({
+    collection: delhiGridWithID,
+    reducer: ee.Reducer.mean(),
+    scale: 9000
+  });
+
+  // Tag every feature with its date, so we know which row belongs to which day
+  result = result.map(function(f) {
+    return f.set('date', dateStr);
+  });
+
+  return result;
+}
+
+// Quick test: confirm the function still works for our known test date
+var testResult = getERA5ForDate('2025-05-15');
+print('Function test (should match earlier result):', testResult.limit(2));
