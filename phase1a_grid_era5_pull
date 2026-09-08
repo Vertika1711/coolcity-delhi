@@ -119,3 +119,21 @@ function getERA5ForDate(dateStr) {
 // Quick test: confirm the function still works for our known test date
 var testResult = getERA5ForDate('2025-05-15');
 print('Function test (should match earlier result):', testResult.limit(2));
+
+// Generate a list of all dates: April 1 - June 30, for each year 2019-2026
+var years = ee.List.sequence(2019, 2026);
+
+var allDates = years.map(function(year) {
+  year = ee.Number(year);
+  var start = ee.Date.fromYMD(year, 4, 1);
+  var end = ee.Date.fromYMD(year, 6, 30);
+  var numDays = end.difference(start, 'day');
+  var dateList = ee.List.sequence(0, numDays).map(function(dayOffset) {
+    return start.advance(dayOffset, 'day').format('YYYY-MM-dd');
+  });
+  return dateList;
+}).flatten();
+
+print('Total number of dates:', allDates.size());
+print('First 5 dates:', allDates.slice(0, 5));
+print('Last 5 dates:', allDates.slice(-5));
