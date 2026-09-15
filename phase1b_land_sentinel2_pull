@@ -3,8 +3,13 @@
 // NDVI, NDBI, Albedo, LST — Delhi 2km Grid, April-June 2019-2026
 // CoolCity Project
 //
-// Paste this whole file into a new script called
-// "phase1b_land_sentinel2_pull" inside the shared coolcity-delhi repo.
+// Paste this whole file into your script called
+// "phase1b_land_sentinel2_pull" inside the shared coolcity-delhi repo,
+// replacing everything currently there.
+//
+// REVISED VERSION: creates one export task PER YEAR (8 tasks total)
+// instead of one giant 8-year task, to avoid the
+// "Too many concurrent aggregations" error.
 // ============================================================
 
 
@@ -253,187 +258,91 @@ function expandToDates(compositeFC, dateStrList) {
 
 
 // ------------------------------------------------------------
-// STEP 8: Build the 16-day windows.
+// STEP 8 (REVISED): Build one year's worth of rows.
 //
-// IMPORTANT:
-// We are currently testing ONLY 2019.
-//
-// Once this test is confirmed, we will change the approach
-// for the complete 2019-2026 dataset so GEE does not hit
-// "Too many concurrent aggregations."
+// This is exactly the same window/date logic as before,
+// just wrapped in a function so we can call it once per year
+// and export each year separately, instead of building one
+// giant 8-year FeatureCollection.
 // ------------------------------------------------------------
 
 var WINDOW_DAYS = 16;
 
-// CURRENT TEST — ONLY 2019
-var years = ee.List.sequence(2019, 2019);
+function buildYearFC(year) {
 
+  year = ee.Number(year);
 
-var allResults = ee.FeatureCollection(
+  // April 1
+  var seasonStart = ee.Date.fromYMD(year, 4, 1);
 
-  years.map(function(year) {
+  // July 1 (exclusive), so June 30 is included
+  var seasonEnd = ee.Date.fromYMD(year, 6, 30).advance(1, 'day');
 
-    year = ee.Number(year);
+  var totalDays = seasonEnd.difference(seasonStart, 'day');
 
-    // April 1
-    var seasonStart = ee.Date.fromYMD(
-      year,
-      4,
-      1
-    );
+  // Generate 16-day window offsets
+  var windowOffsets = ee.List.sequence(0, totalDays, WINDOW_DAYS);
 
-    // July 1 (exclusive), so June 30 is included
-    var seasonEnd = ee.Date.fromYMD(
-      year,
-      6,
-      30
-    ).advance(1, 'day');
+  var yearResults = windowOffsets.map(function(offset) {
 
+    var windowStart = seasonStart.advance(offset, 'day');
 
-    var totalDays = seasonEnd.difference(
-      seasonStart,
-      'day'
-    );
+    // Candidate end of the 16-day window
+    var candidateEndMillis = windowStart.advance(WINDOW_DAYS, 'day').millis();
 
+    // Do not go beyond June 30
+    var windowEndMillis = ee.Number(candidateEndMillis).min(seasonEnd.millis());
 
-    // Generate 16-day window offsets
-    var windowOffsets = ee.List.sequence(
-      0,
-      totalDays,
-      WINDOW_DAYS
-    );
+    var windowEnd = ee.Date(windowEndMillis);
 
+    // Number of calendar days in this window
+    var numDaysInWindow = windowEnd.difference(windowStart, 'day');
 
-    var yearResults = windowOffsets.map(
-      function(offset) {
+    // Create dates for this window
+    var dateStrList = ee.List.sequence(0, numDaysInWindow.subtract(1))
+      .map(function(d) {
+        return windowStart.advance(d, 'day').format('YYYY-MM-dd');
+      });
 
-        var windowStart = seasonStart.advance(
-          offset,
-          'day'
-        );
+    // Create satellite composite
+    var composite = getCompositeForWindow(windowStart, windowEnd);
 
+    // Give the composite value to every date inside the window
+    return expandToDates(composite, dateStrList);
 
-        // Candidate end of the 16-day window
-        var candidateEndMillis =
-          windowStart
-            .advance(WINDOW_DAYS, 'day')
-            .millis();
+  });
 
-
-        // Do not go beyond June 30
-        var windowEndMillis =
-          ee.Number(candidateEndMillis)
-            .min(seasonEnd.millis());
-
-
-        var windowEnd =
-          ee.Date(windowEndMillis);
-
-
-        // Number of calendar days in this window
-        var numDaysInWindow =
-          windowEnd.difference(
-            windowStart,
-            'day'
-          );
-
-
-        // Create dates for this window
-        var dateStrList =
-          ee.List.sequence(
-            0,
-            numDaysInWindow.subtract(1)
-          ).map(function(d) {
-
-            return windowStart
-              .advance(d, 'day')
-              .format('YYYY-MM-dd');
-
-          });
-
-
-        // Create satellite composite
-        var composite =
-          getCompositeForWindow(
-            windowStart,
-            windowEnd
-          );
-
-
-        // Give the composite value to every date
-        // inside the window
-        return expandToDates(
-          composite,
-          dateStrList
-        );
-
-      }
-    );
-
-
-    return ee.FeatureCollection(
-      yearResults
-    ).flatten();
-
-  })
-
-).flatten();
+  return ee.FeatureCollection(yearResults).flatten();
+}
 
 
 // ------------------------------------------------------------
-// STEP 9: Inspect the resulting table.
-// ------------------------------------------------------------
-
-print(
-  'Sample of final Phase 1b table:',
-  allResults.limit(5)
-);
-
-// NEW CHECK — count total rows
-print(
-  'Total rows:',
-  allResults.size()
-);
-
-
-// ------------------------------------------------------------
-// STEP 10: Export as CSV.
+// STEP 9 (REVISED): Create ONE export task per year.
 //
-// DO NOT RUN THE EXPORT TASK YET.
-// We are currently only testing the computation.
+// Instead of one 8-year export, this registers 8 separate
+// tasks in the Tasks tab — one per year. Each one is a much
+// smaller computation, so it stays under GEE's aggregation
+// limits. You'll run each task individually.
 // ------------------------------------------------------------
 
-Export.table.toDrive({
+var allYears = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026];
 
-  collection: allResults,
+allYears.forEach(function(year) {
 
-  description:
-    'CoolCity_Landsat_Phase1b_2019_2026',
+  var yearFC = buildYearFC(year);
 
-  folder:
-    'CoolCity_Exports',
-
-  fileNamePrefix:
-    'coolcity_landsat_phase1b_full',
-
-  fileFormat:
-    'CSV',
-
-  selectors: [
-    'cell_id',
-    'date',
-    'NDVI',
-    'NDBI',
-    'ALBEDO',
-    'LST'
-  ]
+  Export.table.toDrive({
+    collection: yearFC,
+    description: 'CoolCity_Landsat_Phase1b_' + year,
+    folder: 'CoolCity_Exports',
+    fileNamePrefix: 'coolcity_landsat_phase1b_' + year,
+    fileFormat: 'CSV',
+    selectors: ['cell_id', 'date', 'NDVI', 'NDBI', 'ALBEDO', 'LST']
+  });
 
 });
 
-
-print(
-  'Export task created — go to the Tasks tab and click Run to start it.'
-);
+print('8 export tasks created — go to the Tasks tab and click Run on each one.');
 
 
 // ------------------------------------------------------------
