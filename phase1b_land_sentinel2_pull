@@ -2,11 +2,7 @@
 // PHASE 1B — Satellite Land-Surface Covariates
 // NDVI, NDBI, Albedo, LST — Delhi 2km Grid, April-June 2019-2026
 // CoolCity Project
-//
-// Paste this whole file into your script called
-// "phase1b_land_sentinel2_pull" inside the shared coolcity-delhi repo,
-// replacing everything currently there.
-//
+
 // REVISED VERSION: creates one export task PER YEAR (8 tasks total)
 // instead of one giant 8-year task, to avoid the
 // "Too many concurrent aggregations" error.
@@ -14,8 +10,8 @@
 
 
 // ------------------------------------------------------------
-// STEP 1: Reuse Vertika's exact grid-creation code, unchanged.
-// This guarantees your cell_id values match hers exactly so the
+// STEP 1: Reuse exact grid-creation code, unchanged.
+// This guarantees cell_id values match exactly so the
 // two CSVs can be joined later on cell_id + date.
 // ------------------------------------------------------------
 
@@ -36,7 +32,7 @@ var grid = delhiBounds.coveringGrid(proj);
 // Keep only cells that intersect Delhi
 var delhiGrid = grid.filterBounds(delhi);
 
-// Assign the same cell_id as Vertika's script
+// Assign the same cell_id as phase1a script
 var delhiGridWithID = delhiGrid.map(function(feature) {
   return feature.set('cell_id', feature.get('system:index'));
 });
