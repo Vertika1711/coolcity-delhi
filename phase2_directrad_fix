@@ -1,8 +1,6 @@
 // ============================================================
-// PHASE 2 SUPPLEMENTARY — FIX: Direct radiation only
-// Re-pull with plain 24-hour mean (not daylight-masked),
-// to match the time-basis of the other MRT radiation inputs.
-// CoolCity Project
+// PHASE 2 SUPPLEMENTARY — Direct radiation, RESAMPLED FIX
+// Run only after validation confirms zero nulls.
 // ============================================================
 
 var admin2 = ee.FeatureCollection("FAO/GAUL/2015/level2");
@@ -16,9 +14,6 @@ var delhiGridWithID = delhiGrid.map(function(feature) {
   return feature.set('cell_id', feature.get('system:index'));
 });
 
-print('Number of grid cells:', delhiGridWithID.size());
-
-
 function getDirectRadForDate(dateStr) {
   var date = ee.Date(dateStr);
 
@@ -31,10 +26,14 @@ function getDirectRadForDate(dateStr) {
 
   var dailyMean = hourly.mean();
 
-  var result = dailyMean.reduceRegions({
+  var resampled = dailyMean
+    .resample('bilinear')
+    .reproject({crs: 'EPSG:32643', scale: 2000});
+
+  var result = resampled.reduceRegions({
     collection: delhiGridWithID,
     reducer: ee.Reducer.mean(),
-    scale: 27830
+    scale: 2000
   });
 
   result = result.map(function(f) {
@@ -43,11 +42,6 @@ function getDirectRadForDate(dateStr) {
 
   return result;
 }
-
-// Quick test
-var testResult = getDirectRadForDate('2025-05-15');
-print('Function test (first 2):', testResult.limit(2));
-
 
 function buildYearFC(year) {
   year = ee.Number(year);
@@ -73,9 +67,9 @@ allYears.forEach(function(year) {
 
   Export.table.toDrive({
     collection: yearFC,
-    description: 'CoolCity_DirectRad_Fix_' + year,
+    description: 'CoolCity_DirectRad_Resampled_' + year,
     folder: 'CoolCity_Exports',
-    fileNamePrefix: 'coolcity_directrad_fix_' + year,
+    fileNamePrefix: 'coolcity_directrad_resampled_' + year,
     fileFormat: 'CSV',
     selectors: [
       'cell_id', 'date',
