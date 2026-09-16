@@ -1,11 +1,12 @@
 // ============================================================
 // PHASE 2 SUPPLEMENTARY — Additional ERA5 variables for Phase 2
-// Surface pressure, radiation components, direct radiation, MRT inputs
+// Surface pressure, radiation components (ERA5-Land),
+// daylight-averaged direct radiation (full ERA5)
+// CoolCity Project — one export task per year
 // ============================================================
 
 // ------------------------------------------------------------
 // STEP 1: Reuse exact grid-creation code, unchanged.
-// Guarantees cell_id values match the existing merged dataset.
 // ------------------------------------------------------------
 
 var admin2 = ee.FeatureCollection("FAO/GAUL/2015/level2");
@@ -19,19 +20,8 @@ var delhiGridWithID = delhiGrid.map(function(feature) {
   return feature.set('cell_id', feature.get('system:index'));
 });
 
-print('Number of grid cells:', delhiGridWithID.size());
-Map.centerObject(delhi, 9);
-Map.addLayer(delhiGridWithID, {color: 'blue'}, 'Delhi 2km Grid');
-
-
-// ------------------------------------------------------------
-// STEP 2: Add centroid lat/lon to each grid cell.
-// Needed later (in Python) to compute cosine solar zenith angle
-// for the MRT calculation.
-// ------------------------------------------------------------
-
 var delhiGridWithCentroids = delhiGridWithID.map(function(feature) {
-  var centroid = feature.geometry().centroid();
+  var centroid = feature.geometry().centroid({maxError: 1}).transform('EPSG:4326', 1);
   var coords = centroid.coordinates();
   return feature.set({
     'centroid_lon': coords.get(0),
@@ -39,26 +29,115 @@ var delhiGridWithCentroids = delhiGridWithID.map(function(feature) {
   });
 });
 
-print('Sample cell with centroid:', delhiGridWithCentroids.first());
+print('Number of grid cells:', delhiGridWithCentroids.size());
 
 
 // ------------------------------------------------------------
-// STEP 3: Test pull — surface_pressure for ONE date only,
-// same pattern as the original ERA5-Land pull.
+// STEP 2: Function — given a date, return grid with all
+// supplementary variables attached.
 // ------------------------------------------------------------
 
-var testDate = ee.Date('2025-05-15');
+function getSupplementaryForDate(dateStr) {
+  var date = ee.Date(dateStr);
 
-var era5Test = ee.ImageCollection('ECMWF/ERA5_LAND/DAILY_AGGR')
-  .filterDate(testDate, testDate.advance(1, 'day'))
-  .first();
+  // --- ERA5-Land daily: pressure + radiation components ---
+  var era5LandDay = ee.ImageCollection('ECMWF/ERA5_LAND/DAILY_AGGR')
+    .filterDate(date, date.advance(1, 'day'))
+    .first()
+    .select([
+      'surface_pressure',
+      'surface_net_solar_radiation_sum',
+      'surface_thermal_radiation_downwards_sum',
+      'surface_net_thermal_radiation_sum',
+      'surface_solar_radiation_downwards_sum'
+    ]);
 
-var pressureBand = era5Test.select(['surface_pressure']);
+  // --- Full ERA5 hourly: daylight-only mean direct radiation ---
+  var hourly = ee.ImageCollection('ECMWF/ERA5/HOURLY')
+    .filterDate(date, date.advance(1, 'day'))
+    .select([
+      'total_sky_direct_solar_radiation_at_surface',
+      'mean_surface_direct_short_wave_radiation_flux'
+    ]);
 
-var gridWithPressure = pressureBand.reduceRegions({
-  collection: delhiGridWithCentroids,
-  reducer: ee.Reducer.mean(),
-  scale: 9000
+  var daylightOnly = hourly.map(function(img) {
+    var flux = img.select('mean_surface_direct_short_wave_radiation_flux');
+    var mask = flux.gt(0);
+    return img.updateMask(mask);
+  });
+
+  var daylightMean = daylightOnly.mean();
+
+  // --- Combine both images, reduce over grid in one pass ---
+  var combinedImg = era5LandDay.addBands(daylightMean);
+
+  var result = combinedImg.reduceRegions({
+    collection: delhiGridWithCentroids,
+    reducer: ee.Reducer.mean(),
+    scale: 9000
+  });
+
+  result = result.map(function(f) {
+    return f.set('date', dateStr);
+  });
+
+  return result;
+}
+
+// Quick test — confirm the function still works for our known test date
+var testResult = getSupplementaryForDate('2025-05-15');
+print('Function test (first 2):', testResult.limit(2));
+
+
+// ------------------------------------------------------------
+// STEP 3: Build one year's worth of rows.
+// ------------------------------------------------------------
+
+function buildYearFC(year) {
+  year = ee.Number(year);
+  var seasonStart = ee.Date.fromYMD(year, 4, 1);
+  var seasonEnd = ee.Date.fromYMD(year, 6, 30);
+  var numDays = seasonEnd.difference(seasonStart, 'day');
+
+  var dateList = ee.List.sequence(0, numDays).map(function(dayOffset) {
+    return seasonStart.advance(dayOffset, 'day').format('YYYY-MM-dd');
+  });
+
+  var yearResults = dateList.map(function(dateStr) {
+    return getSupplementaryForDate(dateStr);
+  });
+
+  return ee.FeatureCollection(yearResults).flatten();
+}
+
+
+// ------------------------------------------------------------
+// STEP 4: Create ONE export task per year (8 tasks total).
+// ------------------------------------------------------------
+
+var allYears = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026];
+
+allYears.forEach(function(year) {
+  var yearFC = buildYearFC(year);
+
+  Export.table.toDrive({
+    collection: yearFC,
+    description: 'CoolCity_Supplementary_' + year,
+    folder: 'CoolCity_Exports',
+    fileNamePrefix: 'coolcity_supplementary_' + year,
+    fileFormat: 'CSV',
+    selectors: [
+      'cell_id', 'date',
+      'surface_pressure',
+      'surface_net_solar_radiation_sum',
+      'surface_thermal_radiation_downwards_sum',
+      'surface_net_thermal_radiation_sum',
+      'surface_solar_radiation_downwards_sum',
+      'total_sky_direct_solar_radiation_at_surface',
+      'mean_surface_direct_short_wave_radiation_flux',
+      'centroid_lat', 'centroid_lon'
+    ]
+  });
 });
 
-print('Grid with surface pressure (first 3):', gridWithPressure.limit(3));
+print('8 export tasks created — go to the Tasks tab and click Run on each one.');
