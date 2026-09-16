@@ -1,0 +1,64 @@
+// ============================================================
+// PHASE 2 SUPPLEMENTARY — Additional ERA5 variables for Phase 2
+// Surface pressure, radiation components, direct radiation, MRT inputs
+// ============================================================
+
+// ------------------------------------------------------------
+// STEP 1: Reuse exact grid-creation code, unchanged.
+// Guarantees cell_id values match the existing merged dataset.
+// ------------------------------------------------------------
+
+var admin2 = ee.FeatureCollection("FAO/GAUL/2015/level2");
+var delhi = admin2.filter(ee.Filter.eq('ADM1_NAME', 'Delhi'));
+var delhiBounds = delhi.geometry().bounds();
+var proj = ee.Projection('EPSG:32643').atScale(2000);
+var grid = delhiBounds.coveringGrid(proj);
+var delhiGrid = grid.filterBounds(delhi);
+
+var delhiGridWithID = delhiGrid.map(function(feature) {
+  return feature.set('cell_id', feature.get('system:index'));
+});
+
+print('Number of grid cells:', delhiGridWithID.size());
+Map.centerObject(delhi, 9);
+Map.addLayer(delhiGridWithID, {color: 'blue'}, 'Delhi 2km Grid');
+
+
+// ------------------------------------------------------------
+// STEP 2: Add centroid lat/lon to each grid cell.
+// Needed later (in Python) to compute cosine solar zenith angle
+// for the MRT calculation.
+// ------------------------------------------------------------
+
+var delhiGridWithCentroids = delhiGridWithID.map(function(feature) {
+  var centroid = feature.geometry().centroid();
+  var coords = centroid.coordinates();
+  return feature.set({
+    'centroid_lon': coords.get(0),
+    'centroid_lat': coords.get(1)
+  });
+});
+
+print('Sample cell with centroid:', delhiGridWithCentroids.first());
+
+
+// ------------------------------------------------------------
+// STEP 3: Test pull — surface_pressure for ONE date only,
+// same pattern as the original ERA5-Land pull.
+// ------------------------------------------------------------
+
+var testDate = ee.Date('2025-05-15');
+
+var era5Test = ee.ImageCollection('ECMWF/ERA5_LAND/DAILY_AGGR')
+  .filterDate(testDate, testDate.advance(1, 'day'))
+  .first();
+
+var pressureBand = era5Test.select(['surface_pressure']);
+
+var gridWithPressure = pressureBand.reduceRegions({
+  collection: delhiGridWithCentroids,
+  reducer: ee.Reducer.mean(),
+  scale: 9000
+});
+
+print('Grid with surface pressure (first 3):', gridWithPressure.limit(3));
